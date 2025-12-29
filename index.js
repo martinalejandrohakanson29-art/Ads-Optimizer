@@ -5,97 +5,98 @@ const PORT = process.env.PORT || 3000;
 
 const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTZiHReHZbPOXwssGTGf1kuMvXRfG1C7k8cvlZsyVoPVPLZ8DOgIqV_3jerRYO70CMzAs-RVUNnNrqg/pub?output=csv';
 
+// Función para procesar CSV respetando comillas y saltos de línea internos
+function parseCSV(text) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const next = text[i+1];
+        if (char === '"' && inQuotes && next === '"') { field += '"'; i++; }
+        else if (char === '"') { inQuotes = !inQuotes; }
+        else if (char === ',' && !inQuotes) { row.push(field); field = ""; }
+        else if ((char === '\r' || char === '\n') && !inQuotes) {
+            if (field || row.length) { row.push(field); rows.push(row); field = ""; row = []; }
+            if (char === '\r' && next === '\n') i++;
+        } else { field += char; }
+    }
+    if (field || row.length) { row.push(field); rows.push(row); }
+    return rows;
+}
+
 app.get('/', async (req, res) => {
     try {
-        console.log("Iniciando descarga de datos...");
         const response = await axios.get(SHEET_URL);
-        const data = response.data;
-
-        // Separamos filas de forma inteligente (soporta \n y \r\n)
-        // Usamos una expresión que solo corta la línea si no estamos dentro de comillas
-        const rows = data.split(/\r?\n(?=(?:(?:[^"]*"){2})*[^"]*$)/).filter(r => r.trim() !== "").slice(1);
-        
-        console.log(`Se detectaron ${rows.length} productos.`);
+        const allData = parseCSV(response.data);
+        const rows = allData.slice(1); // Quitamos el encabezado
 
         let htmlRows = "";
-
-        rows.forEach((row, index) => {
-            // Separador de comas que respeta el texto entre comillas
-            const columns = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+        rows.forEach((columns) => {
+            // MAPEO EXACTO SEGÚN TU ARCHIVO PRECIOS_ML.xlsx
+            const nombre = columns[1]?.trim() || "Sin nombre";
+            const gananciaNeta = parseFloat(columns[21]) || 0;
+            const margenNetoReal = parseFloat(columns[22]) || 0;
+            const beroas = parseFloat(columns[24]) || 0;
             
-            // MAPEO SEGÚN TU ARCHIVO REAL
-            const nombre = columns[1]?.replace(/"/g, '').trim() || "Producto sin nombre";
-            const margenNetoReal = parseFloat(columns[22]) || 0; 
-            const beroasCalculado = parseFloat(columns[24]) || 0;
-            const roasActual = parseFloat(columns[25]) || 0; // Columna Z que debés completar
+            // Columna Z (índice 25) para el ROAS que vos cargues manualmente
+            const roasActual = parseFloat(columns[25]) || 0; 
 
-            if (nombre === "Producto sin nombre" && beroasCalculado === 0) return;
+            if (nombre === "Sin nombre" || beroas === 0) return;
 
-            let badgeClass = "bg-secondary";
-            let estado = "Esperando ROAS";
-            let recomendacion = "Cargar ROAS en Columna Z";
-
+            let badge = "bg-secondary";
+            let accion = "Cargar ROAS (Col Z)";
+            
             if (roasActual > 0) {
-                if (roasActual < beroasCalculado) {
-                    badgeClass = "bg-danger";
-                    estado = "PÉRDIDA";
-                    recomendacion = "PAUSAR: Estás quemando margen.";
-                } else if (roasActual > (beroasCalculado * 1.5)) {
-                    badgeClass = "bg-success";
-                    estado = "EXCELENTE";
-                    recomendacion = "ESCALAR: Subir presupuesto +10%.";
+                if (roasActual < beroas) {
+                    badge = "bg-danger"; accion = "PAUSAR: Estás perdiendo plata";
+                } else if (roasActual > beroas * 1.5) {
+                    badge = "bg-success"; accion = "ESCALAR: Subir presupuesto";
                 } else {
-                    badgeClass = "bg-warning text-dark";
-                    estado = "RENTABLE";
-                    recomendacion = "MANTENER: Ajustar pujas.";
+                    badge = "bg-warning text-dark"; accion = "OPTIMIZAR: Punto de equilibrio";
                 }
             }
 
             htmlRows += `
                 <tr>
                     <td><strong>${nombre}</strong></td>
-                    <td class="text-center">${beroasCalculado.toFixed(2)}x</td>
-                    <td class="text-center text-primary fw-bold">${roasActual > 0 ? roasActual.toFixed(2) + 'x' : '-'}</td>
-                    <td class="text-center"><span class="badge ${badgeClass}">${estado}</span></td>
-                    <td class="text-center text-success">${(margenNetoReal * 100).toFixed(1)}%</td>
-                    <td><small>${recomendacion}</small></td>
+                    <td class="text-center bg-light">${beroas.toFixed(2)}x</td>
+                    <td class="text-center fw-bold text-primary">${roasActual > 0 ? roasActual.toFixed(2) + 'x' : '-'}</td>
+                    <td class="text-center"><span class="badge ${badge}">${roasActual > 0 ? 'ACTIVO' : 'S/D'}</span></td>
+                    <td class="text-center text-success">$${gananciaNeta.toLocaleString('es-AR')}</td>
+                    <td><small>${accion}</small></td>
                 </tr>`;
         });
 
-        const finalHtml = `
+        res.send(`
         <html>
         <head>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-            <title>Revolucion Motos - Ads Monitor</title>
+            <title>Revolucion Motos - Ads Optimizer</title>
         </head>
         <body class="container mt-4">
-            <h2 class="mb-4 text-center">Monitor de Rentabilidad - Revolucion Motos</h2>
+            <h2 class="mb-4">Monitor de Mercado Ads: Revolucion Motos</h2>
             <div class="table-responsive">
-                <table class="table table-striped table-bordered">
+                <table class="table table-bordered table-striped align-middle">
                     <thead class="table-dark">
                         <tr>
-                            <th>Producto</th>
+                            <th>Producto (PRE)</th>
                             <th>BEROAS (Mínimo)</th>
                             <th>ROAS Actual</th>
                             <th>Estado</th>
-                            <th>Margen Neto</th>
-                            <th>Acción</th>
+                            <th>Ganancia Neta (POST)</th>
+                            <th>Acción Sugerida</th>
                         </tr>
                     </thead>
-                    <tbody>${htmlRows || '<tr><td colspan="6" class="text-center">No se encontraron datos válidos en el Sheet.</td></tr>'}</tbody>
+                    <tbody>${htmlRows}</tbody>
                 </table>
             </div>
         </body>
-        </html>`;
-
-        res.send(finalHtml);
-
-    } catch (error) {
-        console.error("ERROR CRÍTICO:", error.message);
-        res.status(500).send(`Error al leer los datos. Asegurate que el Sheet esté 'Publicado en la Web' como CSV.`);
+        </html>`);
+    } catch (e) {
+        res.status(500).send("Error leyendo la planilla: " + e.message);
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`App corriendo en puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log("Servidor listo"));
